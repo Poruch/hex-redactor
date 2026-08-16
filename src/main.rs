@@ -1,35 +1,53 @@
+mod cli_params;
 mod logic;
 mod models;
 mod ui;
 
+use clap::Parser;
+use cli_params::Cli;
+use crossterm::event::{read, Event, KeyCode};
 use logic::{edit_byte, load_file, save_file};
 use ui::{get_user_input, render};
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let filename = "D:\\Repositories\\Pet-projects\\hex-redactor\\text.txt";
-    let mut hex_data = load_file(filename)?;
 
-    let mut cursor = 0;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::try_parse()?;
+
+    if cli.version {
+        println!("hex_editor {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    let filename = match cli.file {
+        Some(f) => f,
+        None => {
+            eprintln!("Файл не указан. Используйте --help для справки.");
+            std::process::exit(1);
+        }
+    };
+
+    let mut hex_data: models::HexData = load_file(&filename)?;
+
+    let mut cursor: usize = cli.offset;
     loop {
         render(&hex_data, cursor);
         println!("\nВведите команду: (e <позиция> <байт>), (s) сохранить, (q) выход");
-        let input = get_user_input();
+        //let input = get_user_input();
 
-        match input.split_whitespace().collect::<Vec<_>>().as_slice() {
-            ["e", pos, byte] => {
-                let pos: usize = pos.parse().unwrap_or(0);
-                let byte: u8 = byte.parse().unwrap_or(0);
-                if edit_byte(&mut hex_data, pos, byte) {
-                    println!("Байт изменён.");
-                } else {
-                    println!("Ошибка: позиция вне диапазона.");
+        match read()? {
+            Event::Key(event) => match event.code {
+                KeyCode::Right => {
+                    if cursor < hex_data.data.len() - 1 {
+                        cursor += 1;
+                    }
                 }
-            }
-            ["s"] => {
-                save_file(&hex_data)?;
-                println!("Сохранено.");
-            }
-            ["q"] => break,
-            _ => println!("Неизвестная команда."),
+                KeyCode::Left => {
+                    if cursor > 0 {
+                        cursor -= 1;
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
         }
     }
 
