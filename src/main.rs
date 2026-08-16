@@ -7,7 +7,13 @@ use clap::Parser;
 use cli_params::Cli;
 use crossterm::event::{read, Event, KeyCode};
 use logic::{edit_byte, load_file, save_file};
-use ui::{get_user_input, render};
+use ui::Screen;
+
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use std::io::stdout;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::try_parse()?;
@@ -25,31 +31,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    execute!(stdout(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+    let mut screen = Screen::new(cli.offset);
     let mut hex_data: models::HexData = load_file(&filename)?;
 
-    let mut cursor: usize = cli.offset;
     loop {
-        render(&hex_data, cursor);
-        println!("\nВведите команду: (e <позиция> <байт>), (s) сохранить, (q) выход");
-        //let input = get_user_input();
-
+        execute!(stdout(), Clear(ClearType::All))?;
+        screen.render(&hex_data);
         match read()? {
             Event::Key(event) => match event.code {
                 KeyCode::Right => {
-                    if cursor < hex_data.data.len() - 1 {
-                        cursor += 1;
+                    if event.is_press() {
+                        screen.move_right(&hex_data);
                     }
                 }
                 KeyCode::Left => {
-                    if cursor > 0 {
-                        cursor -= 1;
+                    if event.is_press() {
+                        screen.move_left(&hex_data);
                     }
+                }
+                KeyCode::Up => {
+                    if event.is_press() {
+                        screen.move_up(&hex_data);
+                    }
+                }
+                KeyCode::Down => {
+                    if event.is_press() {
+                        screen.move_down(&hex_data);
+                    }
+                }
+                KeyCode::Esc => {
+                    break;
                 }
                 _ => {}
             },
             _ => {}
         }
     }
-
+    disable_raw_mode()?;
+    execute!(stdout(), LeaveAlternateScreen)?;
     Ok(())
 }
