@@ -1,4 +1,4 @@
-use crate::models::HexData;
+use crate::models::{HexData, Mode};
 
 pub struct Screen {
     line_size: u32,
@@ -13,6 +13,9 @@ impl Screen {
             line_count: 4,
             cursor_pos: cursor_pos,
         }
+    }
+    pub fn get_pos(&self) -> usize {
+        self.cursor_pos
     }
     pub fn move_right(&mut self, data: &HexData) -> bool {
         if self.cursor_pos < data.data.len() - 1 {
@@ -42,7 +45,7 @@ impl Screen {
         }
     }
 
-    pub fn render(&mut self, data: &HexData) {
+    pub fn render(&mut self, data: &HexData, mode: &Mode) {
         println!("Файл: {}", data.filename);
         println!("Размер: {} байт", data.data.len());
         println!("Курсор на позиции: {}", self.cursor_pos);
@@ -53,24 +56,33 @@ impl Screen {
         let page_start = (self.cursor_pos / (line_size * line_count)) * (line_size * line_count);
         let page_end = (page_start + line_size * self.line_count as usize).min(data.data.len());
 
-        // Цвета (ANSI)
         const RESET: &str = "\x1b[0m";
         const HIGHLIGHT: &str = "\x1b[44m\x1b[37m";
         const NORMAL: &str = "\x1b[0m";
 
-        // Проходим по строкам
         let mut row_start = page_start;
 
         while row_start < page_end {
-            // Печатаем адрес строки (смещение в hex)
             print!("{:08X}: ", row_start);
 
-            // Выводим байты в текущей строке
             let row_end = (row_start + line_size).min(data.data.len());
             for (i, byte) in data.data[row_start..row_end].iter().enumerate() {
                 let abs_pos = row_start + i;
                 if abs_pos == self.cursor_pos {
-                    print!("{}{:02X}{} ", HIGHLIGHT, byte, RESET);
+                    match mode {
+                        Mode::View => {
+                            print!("{}{:02X}{} ", HIGHLIGHT, byte, RESET);
+                        }
+                        Mode::Edit { input } => {
+                            let display = if input.is_empty() {
+                                format!("__") // или что-то ещё
+                            } else {
+                                format!("{}", input) // или последний символ
+                            };
+                            print!("{}{}{} ", HIGHLIGHT, display, RESET);
+                        }
+                        _ => {}
+                    }
                 } else {
                     print!("{}{:02X}{} ", NORMAL, byte, NORMAL);
                 }
