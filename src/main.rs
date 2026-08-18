@@ -5,7 +5,7 @@ mod ui;
 
 use clap::Parser;
 use cli_params::Cli;
-use crossterm::event::{read, Event, KeyCode};
+use crossterm::event::{read, Event, KeyCode, KeyModifiers};
 use logic::{edit_byte, load_file, save_file};
 use ui::Screen;
 
@@ -41,65 +41,86 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         screen.render(&hex_data, &mode);
 
         match read()? {
-            Event::Key(event) => match mode {
-                models::Mode::View => match event.code {
-                    KeyCode::Right => {
-                        if event.is_press() {
-                            screen.move_right(&hex_data);
-                        }
+            Event::Key(event) => {
+                let is_global = match (event.modifiers, event.code) {
+                    (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
+                        // Ctrl+S: сохранить
+                        save_file(&hex_data)?;
+                        true
                     }
-                    KeyCode::Left => {
-                        if event.is_press() {
-                            screen.move_left(&hex_data);
-                        }
+                    (KeyModifiers::CONTROL, KeyCode::Char('q')) => {
+                        // Ctrl+Q: выход
+                        return Ok(());
                     }
-                    KeyCode::Up => {
-                        if event.is_press() {
-                            screen.move_up(&hex_data);
-                        }
+                    (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                        // Ctrl+C: игнорируем (чтобы не завершать программу)
+                        true
                     }
-                    KeyCode::Down => {
-                        if event.is_press() {
-                            screen.move_down(&hex_data);
-                        }
-                    }
-                    KeyCode::Char('e') | KeyCode::Char('E') => {
-                        if event.is_press() {
-                            mode = models::Mode::Edit {
-                                input: "".to_string(),
-                            };
-                        }
-                    }
-                    KeyCode::Esc => {
-                        break;
-                    }
-                    _ => {}
-                },
-                models::Mode::Edit { ref mut input } => match event.code {
-                    KeyCode::Backspace => {
-                        if event.is_press() {
-                            input.pop();
-                        }
-                    }
-                    KeyCode::Char(c) => {
-                        if event.is_press() && c.is_ascii_hexdigit() {
-                            if input.len() < 2 {
-                                input.push(c);
+                    _ => false,
+                };
+                if is_global {
+                    continue;
+                }
+                match mode {
+                    models::Mode::View => match event.code {
+                        KeyCode::Right => {
+                            if event.is_press() {
+                                screen.move_right(&hex_data);
                             }
                         }
-                    }
-                    KeyCode::Enter => {
-                        if event.is_press() {
-                            if let Ok(byte) = u8::from_str_radix(input, 16) {
-                                edit_byte(&mut hex_data, screen.get_pos(), byte);
-                                mode = models::Mode::View;
+                        KeyCode::Left => {
+                            if event.is_press() {
+                                screen.move_left(&hex_data);
                             }
                         }
-                    }
+                        KeyCode::Up => {
+                            if event.is_press() {
+                                screen.move_up(&hex_data);
+                            }
+                        }
+                        KeyCode::Down => {
+                            if event.is_press() {
+                                screen.move_down(&hex_data);
+                            }
+                        }
+                        KeyCode::Char('e') | KeyCode::Char('E') => {
+                            if event.is_press() {
+                                mode = models::Mode::Edit {
+                                    input: "".to_string(),
+                                };
+                            }
+                        }
+                        KeyCode::Esc => {
+                            break;
+                        }
+                        _ => {}
+                    },
+                    models::Mode::Edit { ref mut input } => match event.code {
+                        KeyCode::Backspace => {
+                            if event.is_press() {
+                                input.pop();
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            if event.is_press() && c.is_ascii_hexdigit() {
+                                if input.len() < 2 {
+                                    input.push(c);
+                                }
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if event.is_press() {
+                                if let Ok(byte) = u8::from_str_radix(input, 16) {
+                                    edit_byte(&mut hex_data, screen.get_pos(), byte);
+                                    mode = models::Mode::View;
+                                }
+                            }
+                        }
+                        _ => {}
+                    },
                     _ => {}
-                },
-                _ => {}
-            },
+                }
+            }
             _ => {}
         }
     }
