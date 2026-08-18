@@ -3,6 +3,7 @@ pub struct HexData {
     pub data: Vec<u8>,
     pub filename: String,
 }
+#[derive(Debug)]
 pub enum Mode {
     View,
     Edit { input: String },

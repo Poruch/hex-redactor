@@ -1,18 +1,33 @@
+use crate::models::Mode::Edit;
 use crate::models::{HexData, Message, Mode};
-
+use clap::Error;
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, Paragraph},
+    Frame, Terminal,
+};
 pub struct Screen {
     line_size: u32,
     line_count: u32,
     cursor_pos: usize,
+    terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
 }
-
+use std::io::stdout;
 impl Screen {
-    pub fn new(cursor_pos: usize) -> Self {
-        Screen {
+    pub fn new(cursor_pos: usize) -> Result<Self, std::io::Error> {
+        Ok(Screen {
             line_size: 16,
             line_count: 4,
             cursor_pos: cursor_pos,
-        }
+            terminal: Terminal::new(CrosstermBackend::new(stdout()))?,
+        })
     }
     pub fn get_pos(&self) -> usize {
         self.cursor_pos
@@ -44,75 +59,163 @@ impl Screen {
             self.cursor_pos += line_size;
         }
     }
+    pub fn setup(&self) -> Result<(), std::io::Error> {
+        execute!(stdout(), EnterAlternateScreen)?;
+        enable_raw_mode()?;
+        Ok(())
+    }
+    pub fn dispose(&self) -> Result<(), std::io::Error> {
+        disable_raw_mode()?;
+        execute!(stdout(), LeaveAlternateScreen)?;
+        Ok(())
+    }
+    pub fn clear(&self) -> Result<(), std::io::Error> {
+        execute!(stdout(), Clear(ClearType::All))?;
+        Ok(())
+    }
 
-    pub fn render(&mut self, data: &HexData, messages: &Vec<Message>, mode: &Mode) {
-        println!("Файл: {}", data.filename);
-        println!("Размер: {} байт", data.data.len());
-        println!("Курсор на позиции: {}", self.cursor_pos);
+    pub fn render(
+        &mut self,
+        hex_data: &HexData,
+        messages: &Vec<Message>,
+        mode: &Mode,
+    ) -> Result<(), std::io::Error> {
+        let cursor_pos = self.cursor_pos;
+        let line_size = self.line_size;
+        let line_count = self.line_count;
 
-        let line_size = self.line_size as usize;
-        let line_count: usize = self.line_count as usize;
+        self.terminal.draw(|frame| {
+            let layout = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+                .split(frame.area());
 
-        let page_start = (self.cursor_pos / (line_size * line_count)) * (line_size * line_count);
-        let page_end = (page_start + line_size * self.line_count as usize).min(data.data.len());
+            Self::render_hex_panel(
+                frame, hex_data, mode, layout[0], cursor_pos, line_size, line_count,
+            );
+            Self::render_status_panel(frame, hex_data, messages, mode, layout[1], cursor_pos);
+        })?;
+        Ok(())
+    }
 
-        const RESET: &str = "\x1b[0m";
-        const HIGHLIGHT: &str = "\x1b[44m\x1b[37m";
-        const NORMAL: &str = "\x1b[0m";
+    fn render_hex_panel(
+        frame: &mut Frame,
+        data: &HexData,
+        mode: &Mode, // пока не используется, но оставим для будущего
+        area: Rect,
+        cursor_pos: usize,
+        line_size: u32,
+        line_count: u32,
+    ) {
+        let line_size = line_size as usize;
+        let line_count = line_count as usize;
 
+        let page_start = (cursor_pos / (line_size * line_count)) * (line_size * line_count);
+        let page_end = (page_start + line_size * line_count).min(data.data.len());
+
+        let mut lines = Vec::new();
         let mut row_start = page_start;
 
         while row_start < page_end {
-            print!("{:08X}: ", row_start);
-
             let row_end = (row_start + line_size).min(data.data.len());
+            let mut spans = Vec::new();
+
+            spans.push(Span::raw(format!("{:08X}: ", row_start)));
+
             for (i, byte) in data.data[row_start..row_end].iter().enumerate() {
                 let abs_pos = row_start + i;
-                if abs_pos == self.cursor_pos {
+                let hex_str = format!("{:02X}", byte);
+
+                let span = if abs_pos == cursor_pos {
                     match mode {
-                        Mode::View => {
-                            print!("{}{:02X}{} ", HIGHLIGHT, byte, RESET);
-                        }
                         Mode::Edit { input } => {
                             let display = if input.is_empty() {
-                                format!("__") // или что-то ещё
+                                "__".to_string()
+                            } else if input.len() == 1 {
+                                format!("_{}", input) // ведущий ноль
                             } else {
-                                format!("{}", input) // или последний символ
+                                input.clone()
                             };
-                            print!("{}{}{} ", HIGHLIGHT, display, RESET);
+                            Span::styled(
+                                display,
+                                Style::default()
+                                    .bg(Color::Blue)
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::BOLD),
+                            )
                         }
-                        _ => {}
+                        Mode::View => Span::styled(
+                            hex_str,
+                            Style::default()
+                                .bg(Color::Blue)
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        _ => Span::styled(
+                            hex_str,
+                            Style::default()
+                                .bg(Color::Blue)
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                     }
                 } else {
-                    print!("{}{:02X}{} ", NORMAL, byte, NORMAL);
-                }
+                    Span::raw(hex_str)
+                };
+                spans.push(span);
+                spans.push(Span::raw(" "));
 
+                // Добавляем дополнительный пробел после 8-го байта
                 if (i + 1) % 8 == 0 && i + 1 < line_size {
-                    print!(" ");
+                    spans.push(Span::raw(" "));
                 }
             }
 
             if row_end - row_start < line_size {
                 for _ in 0..(line_size - (row_end - row_start)) {
-                    print!("   ");
+                    spans.push(Span::raw("   "));
                 }
             }
 
-            print!(" |");
+            spans.push(Span::raw(" | "));
             for &byte in &data.data[row_start..row_end] {
                 let ch = if byte.is_ascii_graphic() || byte.is_ascii_whitespace() {
                     byte as char
                 } else {
                     '.'
                 };
-                print!("{}", ch);
+                spans.push(Span::raw(ch.to_string()));
             }
-            println!();
 
+            lines.push(Line::from(spans));
             row_start += line_size;
         }
-        for msg in messages {
-            println!("[{}]", msg.text); // или используйте стилизованный вывод
+
+        let list = List::new(lines).block(Block::default().borders(Borders::ALL).title("Hex Dump"));
+        frame.render_widget(list, area);
+    }
+    fn render_status_panel(
+        frame: &mut Frame,
+        data: &HexData,
+        messages: &[Message],
+        mode: &Mode,
+        area: Rect,
+        cursor_pos: usize,
+    ) {
+        let mut status_text = format!(
+            "Файл: {} | Размер: {} байт | Курсор: {} | Режим: {:?}",
+            data.filename,
+            data.data.len(),
+            cursor_pos,
+            mode
+        );
+
+        if let Some(last) = messages.last() {
+            status_text.push_str(&format!("\n[{}]", last.text));
         }
+
+        let paragraph = Paragraph::new(status_text)
+            .block(Block::default().borders(Borders::ALL).title("Status"));
+        frame.render_widget(paragraph, area);
     }
 }

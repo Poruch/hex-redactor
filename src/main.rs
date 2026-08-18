@@ -4,7 +4,7 @@ mod models;
 mod ui;
 
 use crossterm::event::poll;
-use std::time::Duration;
+use std::{fs::TryLockError::Error, time::Duration};
 
 use clap::Parser;
 use cli_params::Cli;
@@ -13,12 +13,6 @@ use logic::{edit_byte, load_file, save_file};
 use ui::Screen;
 
 use models::{HexData, Message, Mode};
-
-use crossterm::execute;
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
-};
-use std::io::stdout;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::try_parse()?;
@@ -35,17 +29,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
-    let mut messages: Vec<Message> = Vec::new();
-    execute!(stdout(), EnterAlternateScreen)?;
 
-    enable_raw_mode()?;
-    let mut screen = Screen::new(cli.offset);
     let mut hex_data: HexData = load_file(&filename)?;
+    let mut messages: Vec<Message> = Vec::new();
+    let mut screen = Screen::new(cli.offset)?;
     let mut mode = Mode::View;
-    loop {
-        execute!(stdout(), Clear(ClearType::All))?;
 
-        screen.render(&hex_data, &messages, &mode);
+    screen.setup()?;
+    loop {
+        screen.render(&hex_data, &messages, &mode)?;
 
         if poll(Duration::from_millis(50))? {
             match read()? {
@@ -140,7 +132,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         messages.retain(|msg| !msg.is_expired());
     }
-    disable_raw_mode()?;
-    execute!(stdout(), LeaveAlternateScreen)?;
+    screen.dispose()?;
     Ok(())
 }
