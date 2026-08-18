@@ -1,4 +1,4 @@
-use crate::models::{HexData, Mode};
+use crate::models::{HexData, Message, Mode};
 
 pub struct Screen {
     line_size: u32,
@@ -45,7 +45,7 @@ impl Screen {
         }
     }
 
-    pub fn render(&mut self, data: &HexData, mode: &Mode) {
+    pub fn render(&mut self, data: &HexData, messages: &Vec<Message>, mode: &Mode) {
         println!("Файл: {}", data.filename);
         println!("Размер: {} байт", data.data.len());
         println!("Курсор на позиции: {}", self.cursor_pos);
@@ -110,6 +110,9 @@ impl Screen {
             println!();
 
             row_start += line_size;
+        }
+        for msg in messages {
+            println!("[{}]", msg.text); // или используйте стилизованный вывод
         }
     }
 }
