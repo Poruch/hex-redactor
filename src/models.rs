@@ -7,7 +7,7 @@ pub struct HexData {
 pub enum Mode {
     View,
     Edit { input: String },
-    Command { input: String },
+    _Command { input: String },
 }
 
 pub struct Message {

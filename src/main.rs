@@ -4,7 +4,7 @@ mod models;
 mod ui;
 
 use crossterm::event::poll;
-use std::{fs::TryLockError::Error, time::Duration};
+use std::time::Duration;
 
 use clap::Parser;
 use cli_params::Cli;

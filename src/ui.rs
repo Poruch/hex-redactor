@@ -1,6 +1,6 @@
 use crate::models::Mode::Edit;
 use crate::models::{HexData, Message, Mode};
-use clap::Error;
+
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
@@ -69,27 +69,52 @@ impl Screen {
         execute!(stdout(), LeaveAlternateScreen)?;
         Ok(())
     }
-    pub fn clear(&self) -> Result<(), std::io::Error> {
+    pub fn _clear(&self) -> Result<(), std::io::Error> {
         execute!(stdout(), Clear(ClearType::All))?;
         Ok(())
     }
-
+    fn create_layout(area: Rect) -> std::rc::Rc<[Rect]> {
+        let layout: std::rc::Rc<[Rect]> = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+            .split(area);
+        layout
+    }
     pub fn render(
         &mut self,
         hex_data: &HexData,
         messages: &Vec<Message>,
         mode: &Mode,
     ) -> Result<(), std::io::Error> {
+        let root_area = self.terminal.size()?;
+
+        let layout = Self::create_layout(root_area.into());
+        let addr_width = 10;
+        let ascii_width = 3;
+        let available = ((layout[0].width as usize).saturating_sub(addr_width + ascii_width) as f32
+            * 0.75) as usize
+            - 2;
+        let mut line_size = 0;
+        let mut width_used = 0;
+        while width_used + 3 <= available {
+            line_size += 1;
+            width_used += 3;
+            if line_size % 8 == 0 && width_used + 1 <= available {
+                width_used += 1;
+            }
+        }
+        if line_size < 1 {
+            line_size = 1;
+        }
+        self.line_size = line_size.min(64);
+        self.line_count = (layout[0].height as u32).saturating_sub(2);
+
         let cursor_pos = self.cursor_pos;
         let line_size = self.line_size;
         let line_count = self.line_count;
 
         self.terminal.draw(|frame| {
-            let layout = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
-                .split(frame.area());
-
+            let layout = Self::create_layout(frame.area());
             Self::render_hex_panel(
                 frame, hex_data, mode, layout[0], cursor_pos, line_size, line_count,
             );
@@ -128,7 +153,7 @@ impl Screen {
 
                 let span = if abs_pos == cursor_pos {
                     match mode {
-                        Mode::Edit { input } => {
+                        Edit { input } => {
                             let display = if input.is_empty() {
                                 "__".to_string()
                             } else if input.len() == 1 {
@@ -178,13 +203,24 @@ impl Screen {
             }
 
             spans.push(Span::raw(" | "));
-            for &byte in &data.data[row_start..row_end] {
+            for (i, byte) in data.data[row_start..row_end].iter().enumerate() {
+                let abs_pos = row_start + i;
                 let ch = if byte.is_ascii_graphic() || byte.is_ascii_whitespace() {
-                    byte as char
+                    *byte as char
                 } else {
                     '.'
                 };
-                spans.push(Span::raw(ch.to_string()));
+                if abs_pos == cursor_pos {
+                    spans.push(Span::styled(
+                        ch.to_string(),
+                        Style::default()
+                            .bg(Color::Blue)
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    spans.push(Span::raw(ch.to_string()));
+                }
             }
 
             lines.push(Line::from(spans));
