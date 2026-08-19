@@ -73,12 +73,20 @@ impl Screen {
         execute!(stdout(), Clear(ClearType::All))?;
         Ok(())
     }
-    fn create_layout(area: Rect) -> std::rc::Rc<[Rect]> {
-        let layout: std::rc::Rc<[Rect]> = Layout::default()
+    fn create_layout(area: Rect) -> Vec<Rect> {
+        let outer_layout = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+            .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
-        layout
+
+        let inner_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Percentage(75), Constraint::Percentage(25)])
+            .split(outer_layout[0]);
+        let vec: Vec<Rect> = outer_layout.to_vec();
+        let mut all_rects = vec.clone();
+        all_rects.extend(inner_layout.to_vec());
+        all_rects
     }
     pub fn render(
         &mut self,
@@ -91,7 +99,7 @@ impl Screen {
         let layout = Self::create_layout(root_area.into());
         let addr_width = 10;
         let ascii_width = 3;
-        let available = ((layout[0].width as usize).saturating_sub(addr_width + ascii_width) as f32
+        let available = ((layout[2].width as usize).saturating_sub(addr_width + ascii_width) as f32
             * 0.75) as usize
             - 2;
         let mut line_size = 0;
@@ -116,9 +124,10 @@ impl Screen {
         self.terminal.draw(|frame| {
             let layout = Self::create_layout(frame.area());
             Self::render_hex_panel(
-                frame, hex_data, mode, layout[0], cursor_pos, line_size, line_count,
+                frame, hex_data, mode, layout[2], cursor_pos, line_size, line_count,
             );
             Self::render_status_panel(frame, hex_data, messages, mode, layout[1], cursor_pos);
+            Self::render_notification_panel(frame, messages, layout[3])
         })?;
         Ok(())
     }
@@ -238,7 +247,7 @@ impl Screen {
         area: Rect,
         cursor_pos: usize,
     ) {
-        let mut status_text = format!(
+        let status_text = format!(
             "Файл: {} | Размер: {} байт | Курсор: {} | Режим: {:?}",
             data.filename,
             data.data.len(),
@@ -246,12 +255,25 @@ impl Screen {
             mode
         );
 
-        if let Some(last) = messages.last() {
-            status_text.push_str(&format!("\n[{}]", last.text));
-        }
-
         let paragraph = Paragraph::new(status_text)
             .block(Block::default().borders(Borders::ALL).title("Status"));
+        frame.render_widget(paragraph, area);
+    }
+
+    fn render_notification_panel(frame: &mut Frame, messages: &[Message], area: Rect) {
+        let mut msgs = messages
+            .iter()
+            .map(|msg| format!("[{}]", msg.text))
+            .collect::<Vec<String>>();
+
+        msgs.reverse();
+        let notification_text: String = msgs.join("\n");
+
+        let paragraph = Paragraph::new(notification_text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Notifications"),
+        );
         frame.render_widget(paragraph, area);
     }
 }
