@@ -1,6 +1,6 @@
+use crate::logger::{self, Logger};
 use crate::models::Mode::Edit;
 use crate::models::{HexData, Message, Mode};
-
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
@@ -13,26 +13,33 @@ use ratatui::{
     widgets::{Block, Borders, List, Paragraph},
     Frame, Terminal,
 };
+use std::cell::RefCell;
+use std::rc::Rc;
 pub struct Screen {
     line_size: u32,
     line_count: u32,
     cursor_pos: usize,
+    anchor: Option<usize>,
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+    logger: Rc<RefCell<Logger>>,
 }
 use std::io::stdout;
 impl Screen {
-    pub fn new(cursor_pos: usize) -> Result<Self, std::io::Error> {
+    pub fn new(logger: Rc<RefCell<Logger>>, cursor_pos: usize) -> Result<Self, std::io::Error> {
         Ok(Screen {
             line_size: 16,
             line_count: 4,
             cursor_pos: cursor_pos,
+            anchor: None,
             terminal: Terminal::new(CrosstermBackend::new(stdout()))?,
+            logger,
         })
     }
-    pub fn get_pos(&self) -> usize {
-        self.cursor_pos
+    pub fn get_pos(&mut self) -> &mut usize {
+        &mut self.cursor_pos
     }
     pub fn move_right(&mut self, data: &HexData) -> bool {
+        self.anchor = None;
         if self.cursor_pos < data.data.len() - 1 {
             self.cursor_pos += 1;
             return true;
@@ -40,23 +47,71 @@ impl Screen {
         false
     }
     pub fn move_left(&mut self, _data: &HexData) -> bool {
+        self.anchor = None;
         if self.cursor_pos > 0 {
             self.cursor_pos -= 1;
             return true;
         }
         false
     }
+    fn move_cursor_right_raw(&mut self, data: &HexData) -> bool {
+        if self.cursor_pos < data.data.len() - 1 {
+            self.cursor_pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn move_cursor_left_raw(&mut self, _data: &HexData) -> bool {
+        if self.cursor_pos > 0 {
+            self.cursor_pos -= 1;
+            true
+        } else {
+            false
+        }
+    }
     pub fn move_up(&mut self, _data: &HexData) {
+        self.anchor = None;
         let line_size = self.line_size as usize;
         if self.cursor_pos >= line_size {
             self.cursor_pos -= line_size;
         }
     }
     pub fn move_down(&mut self, data: &HexData) {
+        self.anchor = None;
         let line_size = self.line_size as usize;
         let max_pos = data.data.len().saturating_sub(1);
         if self.cursor_pos + line_size <= max_pos {
             self.cursor_pos += line_size;
+        }
+    }
+    pub fn move_selection_right(&mut self, data: &HexData) {
+        if self.anchor.is_none() {
+            self.anchor = Some(self.cursor_pos);
+        }
+        self.move_cursor_right_raw(data);
+    }
+    pub fn move_selection_left(&mut self, data: &HexData) {
+        if self.anchor.is_none() {
+            self.anchor = Some(self.cursor_pos);
+        }
+        self.move_cursor_left_raw(data);
+    }
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        if let (Some(anchor), Some(cursor)) = (self.anchor, Some(self.cursor_pos)) {
+            let (start, end) = (anchor.min(cursor), anchor.max(cursor));
+            if start != end {
+                return Some((start, end));
+            }
+        }
+        None
+    }
+    pub fn is_single_byte(&self) -> bool {
+        if let Some((s, e)) = self.selection_range() {
+            s + 1 == e // длина 1
+        } else {
+            false
         }
     }
     pub fn setup(&self) -> Result<(), std::io::Error> {
@@ -88,12 +143,7 @@ impl Screen {
         all_rects.extend(inner_layout.to_vec());
         all_rects
     }
-    pub fn render(
-        &mut self,
-        hex_data: &HexData,
-        messages: &Vec<Message>,
-        mode: &Mode,
-    ) -> Result<(), std::io::Error> {
+    pub fn render(&mut self, hex_data: &HexData, mode: &Mode) -> Result<(), std::io::Error> {
         let root_area = self.terminal.size()?;
 
         let layout = Self::create_layout(root_area.into());
@@ -117,16 +167,34 @@ impl Screen {
         self.line_size = line_size.min(64);
         self.line_count = (layout[0].height as u32).saturating_sub(2);
 
+        // if let Some((s, e)) = self.selection_range() {
+        //     self.logger
+        //         .borrow_mut()
+        //         .add_debug_log(&format!("Selection range: {}..{}", s, e), 3);
+        // } else {
+        //     self.logger.borrow_mut().add_debug_log("No selection", 3);
+        // }
+
         let cursor_pos = self.cursor_pos;
         let line_size = self.line_size;
         let line_count = self.line_count;
-
+        let selection = self.selection_range();
+        let logger_guard = self.logger.borrow();
+        let messages = &logger_guard.get_messages();
         self.terminal.draw(|frame| {
             let layout = Self::create_layout(frame.area());
             Self::render_hex_panel(
-                frame, hex_data, mode, layout[2], cursor_pos, line_size, line_count,
+                frame,
+                hex_data,
+                mode,
+                layout[2],
+                cursor_pos,
+                line_size,
+                line_count,
+                selection,
+                Rc::new(None),
             );
-            Self::render_status_panel(frame, hex_data, messages, mode, layout[1], cursor_pos);
+            Self::render_status_panel(frame, hex_data, mode, layout[1], cursor_pos);
             Self::render_notification_panel(frame, messages, layout[3])
         })?;
         Ok(())
@@ -140,6 +208,8 @@ impl Screen {
         cursor_pos: usize,
         line_size: u32,
         line_count: u32,
+        selection: Option<(usize, usize)>,
+        logger: Rc<Option<Logger>>,
     ) {
         let line_size = line_size as usize;
         let line_count = line_count as usize;
@@ -159,42 +229,49 @@ impl Screen {
             for (i, byte) in data.data[row_start..row_end].iter().enumerate() {
                 let abs_pos = row_start + i;
                 let hex_str = format!("{:02X}", byte);
-
-                let span = if abs_pos == cursor_pos {
-                    match mode {
-                        Edit { input } => {
-                            let display = if input.is_empty() {
-                                "__".to_string()
-                            } else if input.len() == 1 {
-                                format!("_{}", input) // ведущий ноль
-                            } else {
-                                input.clone()
-                            };
-                            Span::styled(
-                                display,
+                let span = if let Some((s, e)) = selection {
+                    if abs_pos <= e && abs_pos >= s {
+                        Span::styled(
+                            hex_str,
+                            Style::default()
+                                .bg(Color::Blue)
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        Span::raw(hex_str)
+                    }
+                } else {
+                    if abs_pos == cursor_pos {
+                        match mode {
+                            Edit { input } => {
+                                let display = if input.is_empty() {
+                                    "__".to_string()
+                                } else if input.len() == 1 {
+                                    format!("_{}", input) // ведущий ноль
+                                } else {
+                                    input.clone()
+                                };
+                                Span::styled(
+                                    display,
+                                    Style::default()
+                                        .bg(Color::Blue)
+                                        .fg(Color::White)
+                                        .add_modifier(Modifier::BOLD),
+                                )
+                            }
+                            Mode::View => Span::styled(
+                                hex_str,
                                 Style::default()
                                     .bg(Color::Blue)
                                     .fg(Color::White)
                                     .add_modifier(Modifier::BOLD),
-                            )
+                            ),
+                            _ => Span::raw(hex_str),
                         }
-                        Mode::View => Span::styled(
-                            hex_str,
-                            Style::default()
-                                .bg(Color::Blue)
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        _ => Span::styled(
-                            hex_str,
-                            Style::default()
-                                .bg(Color::Blue)
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD),
-                        ),
+                    } else {
+                        Span::raw(hex_str)
                     }
-                } else {
-                    Span::raw(hex_str)
                 };
                 spans.push(span);
                 spans.push(Span::raw(" "));
@@ -242,7 +319,6 @@ impl Screen {
     fn render_status_panel(
         frame: &mut Frame,
         data: &HexData,
-        messages: &[Message],
         mode: &Mode,
         area: Rect,
         cursor_pos: usize,
